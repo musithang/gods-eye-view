@@ -90,6 +90,10 @@ function sourceLabel(source) {
  */
 export function localAdsbSourceText(record) {
   const sources = recordSources(record);
+  if (sources.includes('soapy'))
+    return sources.includes('feed')
+      ? t('Your SoapySDR receiver and decoder feed')
+      : t('Your SoapySDR receiver');
   if (sources.includes('webusb') && sources.includes('feed'))
     return t('Your RTL-SDR receiver and decoder feed');
   if (sources.includes('feed')) return t('Your decoder feed');

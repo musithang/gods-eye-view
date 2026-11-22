@@ -17,5 +17,6 @@ export const BAND_LABELS = Object.freeze({
 });
 export const SOURCE_LABELS = Object.freeze({
   webusb: 'browser SDR',
+  soapy: 'SoapySDR',
   feed: 'decoder feed',
 });

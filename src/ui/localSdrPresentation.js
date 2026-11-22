@@ -3,7 +3,7 @@ import { formatNumber, msg, t, tn } from '../i18n/index.js';
 import { formatQuantity } from './unitLabels.js';
 
 /**
- * Pure presentation of the Local RTL-SDR card in the Radio panel. Receives the
+ * Pure presentation of the Local SDR card in the Radio panel. Receives the
  * receiver session snapshot and returns what each control should show.
  */
 
@@ -146,8 +146,21 @@ export function localSdrCardView(state) {
       : state.connected
         ? t('DISCONNECT')
         : t('CONNECT'),
-    connectDisabled: transitional || !state.webUsbSupported,
+    connectDisabled:
+      transitional ||
+      (!state.connected &&
+        (state.soapyScanning ||
+          (!state.webUsbSupported && !state.soapyDevices?.length))),
     connectPressed: Boolean(state.connected),
+    receiverChoice: state.receiverChoice,
+    soapyEnabled: state.soapyEnabled,
+    soapyDevices: state.soapyDevices || [],
+    soapyError: state.soapyError,
+    soapyEmpty: state.soapyEmpty,
+    scanDisabled: transitional || state.connected || state.soapyScanning,
+    receiverChoiceDisabled:
+      transitional || state.connected || state.soapyScanning,
+    webUsbSupported: state.webUsbSupported,
     fmActive,
     adsbActive,
     modeDisabled: transitional,
@@ -159,7 +172,12 @@ export function localSdrCardView(state) {
           : t('LOCATE'),
     locateDisabled: state.locationStatus === 'requesting',
     locateActive: state.locationStatus === 'ready',
-    changeDeviceDisabled: transitional || !state.webUsbSupported,
+    changeDeviceDisabled:
+      transitional ||
+      !state.webUsbSupported ||
+      state.receiverBackend === 'soapy' ||
+      (state.receiverChoice !== undefined &&
+        !['auto', 'webusb'].includes(state.receiverChoice)),
     gainValue: formatGain(state.gain),
     gainDisabled: transitional,
     statsHidden: !(adsbActive && state.connected),

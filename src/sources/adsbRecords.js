@@ -24,7 +24,7 @@
  *   messageCount: number,
  *   rssiDbfs: number|null,
  *   band: '1090'|'978',           // 1090 MHz Mode S/ES or 978 MHz UAT
- *   source: 'webusb'|'feed',      // browser SDR or decoder feed
+ *   source: 'webusb'|'soapy'|'feed', // receiver backend or decoder feed
  * }
  *
  * This module is portable: no Cesium, DOM, network or storage access.
@@ -311,7 +311,7 @@ export function summarizeLocalAdsb(records, nowMs) {
 }
 
 const BAND_ORDER = Object.freeze(['1090', '978']);
-const SOURCE_ORDER = Object.freeze(['webusb', 'feed']);
+const SOURCE_ORDER = Object.freeze(['webusb', 'soapy', 'feed']);
 
 function ordered(values, order) {
   return order.filter((value) => values.has(value));

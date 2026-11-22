@@ -278,8 +278,10 @@ function withDeadline(promise, ms, message) {
   return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
 }
 
-function publicAircraft(aircraft) {
-  return Array.isArray(aircraft) ? aircraft.map((entry) => ({ ...entry })) : [];
+function publicAircraft(aircraft, backend) {
+  if (!Array.isArray(aircraft)) return [];
+  const source = backend === 'soapy' ? { source: 'soapy' } : null;
+  return aircraft.map((entry) => ({ ...entry, ...source }));
 }
 
 function clampFmFrequency(value) {
@@ -334,7 +336,7 @@ function streamingMessage(mode) {
 }
 
 /**
- * Browser-local RTL-SDR session shared by the FM controls and the Local ADS-B
+ * Local receiver session shared by the FM controls and the Local ADS-B
  * layer. `state.aircraft` holds source-agnostic records from
  * `src/sources/adsbRecords.js`.
  */
@@ -345,6 +347,7 @@ export class SdrController {
    *   Builds the RTL-SDR provider around the selecting WebUSB wrapper.
    * @param {Storage|null} [options.storage] Gain and device preferences.
    * @param {USB|null} [options.webUsb] WebUSB entry point.
+   * @param {{discover:Function,open:Function}|null} [options.soapy] SoapySDR bridge.
    * @param {number} [options.readStallMs] Deadline for one bulk sample read.
    * @param {number} [options.closeTimeoutMs] Deadline for a graceful close.
    */
@@ -356,16 +359,26 @@ export class SdrController {
     decoderDiagnostics = false,
     storage = defaultStorage(),
     webUsb = typeof navigator !== 'undefined' ? navigator.usb : null,
+    soapy = null,
   } = {}) {
     const webUsbSupported = Boolean(webUsb);
     this._webUsb = webUsb || null;
+    this._soapy = soapy;
+    this._soapyScan = null;
     this._storage = storage;
     this._gainByMode = readSdrGainSettings(storage);
     this._deviceMemory = createSdrDeviceMemory(storage);
     this.state = {
       webUsbSupported,
+      soapyEnabled: Boolean(soapy),
+      soapyDevices: [],
+      soapyScanning: false,
+      soapyError: null,
+      soapyEmpty: false,
+      receiverChoice: 'auto',
+      receiverBackend: null,
       connected: false,
-      status: webUsbSupported ? 'idle' : 'unsupported',
+      status: webUsbSupported || soapy ? 'idle' : 'unsupported',
       message: '',
       mode: 'fm',
       frequencyHz: FM_DEFAULT_HZ,
@@ -392,9 +405,11 @@ export class SdrController {
       audioLevelDbfs: null,
     };
     this._wording = {
-      message: webUsbSupported
-        ? () => t('Connect an RTL-SDR to begin.')
-        : () => t('WebUSB is unavailable in this browser'),
+      message: soapy
+        ? () => t('Connect a local SDR to begin.')
+        : webUsbSupported
+          ? () => t('Connect an RTL-SDR to begin.')
+          : () => t('WebUSB is unavailable in this browser'),
       seekMessage: null,
     };
     this.state.message = this._wording.message();
@@ -1037,7 +1052,7 @@ export class SdrController {
     this._messageWindowCount += decodedCount;
     const elapsed = now - this._messageWindowStartedAt;
     const patch = {
-      aircraft: publicAircraft(message.aircraft),
+      aircraft: publicAircraft(message.aircraft, this._device?.backend),
       decodedMessages: this.state.decodedMessages + decodedCount,
     };
     // Cumulative count of fixes the decoder's speed check refused.
@@ -1106,6 +1121,15 @@ export class SdrController {
       }
       if (!this._owns(token, device)) return false;
       const [actualRate, , actualFrequency] = results;
+      if (
+        device.backend === 'soapy' &&
+        mode === 'adsb' &&
+        (!Number.isFinite(actualRate) ||
+          Math.abs(actualRate - sampleRate) > 30_000)
+      )
+        throw new Error(
+          'SoapySDR receiver cannot provide the ADS-B decoder’s 2 MS/s rate',
+        );
       this._setState({
         sampleRate: Number.isFinite(actualRate) ? actualRate : sampleRate,
         frequencyHz: Number.isFinite(actualFrequency)
@@ -1123,12 +1147,75 @@ export class SdrController {
     return true;
   }
 
+  async scanReceivers({ quiet = false } = {}) {
+    if (this._destroyed || !this._soapy) return;
+    if (this._soapyScan) return this._soapyScan;
+    this._setState({
+      soapyScanning: true,
+      soapyError: null,
+      soapyEmpty: false,
+    });
+    this._soapyScan = this._soapy
+      .discover()
+      .then((devices) => {
+        if (this._destroyed) return;
+        // Direct RTL-SDRs use the existing WebUSB provider on supported browsers.
+        const soapyDevices = devices.filter(
+          ({ driver }) => !this.state.webUsbSupported || driver !== 'rtlsdr',
+        );
+        const choice = this.state.receiverChoice;
+        const keepChoice =
+          choice === 'webusb' || soapyDevices.some(({ id }) => id === choice);
+        this._setState({
+          soapyDevices,
+          soapyEmpty: !soapyDevices.length && !quiet,
+          receiverChoice: keepChoice ? choice : 'auto',
+          status:
+            this.state.status === 'unsupported' && soapyDevices.length
+              ? 'idle'
+              : this.state.status,
+        });
+      })
+      .catch((error) => {
+        if (!this._destroyed && !quiet)
+          this._setState({ soapyError: error.message });
+      })
+      .finally(() => {
+        this._soapyScan = null;
+        if (!this._destroyed) this._setState({ soapyScanning: false });
+      });
+    return this._soapyScan;
+  }
+
+  selectReceiver(choice) {
+    if (this._destroyed || this._device || this.state.status === 'connecting')
+      return;
+    if (
+      choice === 'auto' ||
+      (choice === 'webusb' && this.state.webUsbSupported) ||
+      this.state.soapyDevices.some(({ id }) => id === choice)
+    )
+      this._setState({ receiverChoice: choice });
+  }
+
+  async _selectSoapyDevice(mode) {
+    const { receiverChoice, soapyDevices } = this.state;
+    if (this._forcePicker || receiverChoice === 'webusb') return null;
+    if (receiverChoice !== 'auto')
+      return soapyDevices.find(({ id }) => id === receiverChoice);
+    if (!soapyDevices.length || (await this._preferredDevice(mode)))
+      return null;
+    return soapyDevices[0];
+  }
+
   async connect(mode = this.state.mode) {
     if (this._destroyed) return false;
-    if (!this.state.webUsbSupported) {
+    if (!this.state.webUsbSupported && !this.state.soapyDevices.length) {
       this._setState({
         status: 'unsupported',
-        message: () => t('WebUSB requires desktop Chrome or Edge'),
+        message: this._soapy
+          ? () => t('No SoapySDR receiver found. Scan for devices.')
+          : () => t('WebUSB requires desktop Chrome or Edge'),
       });
       return false;
     }
@@ -1137,10 +1224,13 @@ export class SdrController {
     const superseded = () => this._destroyed || token !== this._sessionToken;
     this._setState({
       status: 'connecting',
-      message: () => t('Waiting for an RTL-SDR device…'),
+      message: this._soapy
+        ? () => t('Opening local SDR…')
+        : () => t('Waiting for an RTL-SDR device…'),
       errorText: null,
     });
     let acquisition = null;
+    let soapyDevice = null;
     try {
       const nextMode = normalizeMode(mode);
       this._setState({ mode: nextMode, gain: this._gainByMode[nextMode] });
@@ -1158,7 +1248,9 @@ export class SdrController {
       // would let that close act on this session.
       await this._awaitUsbOwnership(superseded);
       if (superseded()) return false;
-      acquisition = this._beginAcquisition();
+      soapyDevice = await this._selectSoapyDevice(nextMode);
+      if (superseded()) return false;
+      acquisition = this._beginAcquisition(soapyDevice);
       const device = await acquisition.provider.get();
       acquisition.device = device || null;
       // stop() or destroy() ran while the picker/open was pending: the late
@@ -1186,9 +1278,12 @@ export class SdrController {
         connected: true,
         status: 'streaming',
         message: streamingMessage(this.state.mode),
-        deviceLabel: this._deviceIdentity
-          ? sdrDeviceLabel(this._deviceIdentity)
-          : null,
+        receiverBackend: soapyDevice ? 'soapy' : 'webusb',
+        deviceLabel: soapyDevice
+          ? `${soapyDevice.label} · SoapySDR`
+          : this._deviceIdentity
+            ? sdrDeviceLabel(this._deviceIdentity)
+            : null,
         workerBlocks: 0,
         iqLevelDbfs: null,
         audioLevelDbfs: null,
@@ -1217,7 +1312,9 @@ export class SdrController {
       if (superseded()) return false;
       this._setState({
         connected: false,
-        ...errorState(describeConnectionError(error)),
+        ...errorState(
+          soapyDevice ? error.message : describeConnectionError(error),
+        ),
       });
       return false;
     }
@@ -1228,7 +1325,7 @@ export class SdrController {
    * it is handed, so a device opened by a `get()` that later fails can still
    * be closed.
    */
-  _beginAcquisition() {
+  _beginAcquisition(soapyDevice = null) {
     let settle = null;
     const acquisition = {
       sequence: ++this._acquisitionSequence,
@@ -1246,12 +1343,14 @@ export class SdrController {
       }),
       settle,
     };
-    acquisition.provider = this._providerFactory({
-      onUsbDevice: (usbDevice) => {
-        acquisition.usbDevices.add(usbDevice);
-      },
-      isFenced: () => acquisition.abandoned,
-    });
+    acquisition.provider = soapyDevice
+      ? { get: () => this._soapy.open(soapyDevice) }
+      : this._providerFactory({
+          onUsbDevice: (usbDevice) => {
+            acquisition.usbDevices.add(usbDevice);
+          },
+          isFenced: () => acquisition.abandoned,
+        });
     this._acquisitions.add(acquisition);
     return acquisition;
   }
@@ -1449,6 +1548,15 @@ export class SdrController {
    * bounded too; this never throws.
    */
   async _closeDevice(device, provider, { queued, mayForceClose = () => true }) {
+    if (device?.backend === 'soapy') {
+      if (queued) this._resetUsbQueue();
+      await withDeadline(
+        device.close(),
+        this._closeTimeoutMs,
+        'SoapySDR close timed out',
+      ).catch((error) => console.warn('[SDR] Device close failed:', error));
+      return;
+    }
     const usbDevice = rawUsbDevice(device, provider);
     try {
       // Graceful close waits behind queued USB work, but only so long: a
@@ -1551,7 +1659,9 @@ export class SdrController {
           const read = withDeadline(
             device.readSamples(READ_SAMPLE_COUNT),
             this._readStallMs,
-            'RTL-SDR sample read stalled',
+            device.backend === 'soapy'
+              ? 'SoapySDR sample read stalled'
+              : 'RTL-SDR sample read stalled',
           );
           read.catch(() => {});
           chain = chain.then(() => read).then(deliver);
@@ -1570,7 +1680,11 @@ export class SdrController {
         console.warn('[SDR] Sample read failed:', error);
         this._setState({
           connected: false,
-          ...errorState(msg('RTL-SDR sample stream stopped')),
+          ...errorState(
+            this._device?.backend === 'soapy'
+              ? error.message
+              : msg('RTL-SDR sample stream stopped'),
+          ),
         });
         await this.stop({ preserveMessage: true });
         break;
@@ -1596,7 +1710,11 @@ export class SdrController {
     // A different authorized receiver preferred for this mode (the 1090 MHz
     // channel of a dual-channel board, or a device remembered for the mode)
     // takes over: reopen through selection instead of retuning this one.
-    if (nextMode !== this.state.mode && this._deviceIdentity) {
+    if (
+      nextMode !== this.state.mode &&
+      this._deviceIdentity &&
+      device.backend !== 'soapy'
+    ) {
       const preferred = await this._preferredDevice(nextMode);
       if (!this._owns(token, device)) return false;
       if (preferred && !sameSdrDevice(preferred, this._deviceIdentity)) {
@@ -1642,7 +1760,15 @@ export class SdrController {
     } catch (error) {
       if (!this._owns(token, device)) return false;
       console.warn('[SDR] Mode switch failed:', error);
-      this._setState(errorState(describeConnectionError(error)));
+      this._setState(
+        errorState(
+          device.backend === 'soapy'
+            ? error.message
+            : describeConnectionError(error),
+        ),
+      );
+      if (device.backend === 'soapy')
+        await this.stop({ preserveMessage: true });
       return false;
     }
   }
@@ -1683,7 +1809,13 @@ export class SdrController {
       if (targetMode === 'adsb') this._setState(this._resetAdsbCounters());
     } catch (error) {
       console.warn('[SDR] Gain change failed:', error);
-      this._setState(errorState(msg('RTL-SDR gain change failed')));
+      this._setState(
+        errorState(
+          this._device?.backend === 'soapy'
+            ? error.message
+            : msg('RTL-SDR gain change failed'),
+        ),
+      );
       return null;
     }
     return setting;
@@ -1738,7 +1870,13 @@ export class SdrController {
       });
       return true;
     } catch (error) {
-      this._setState(errorState(describeConnectionError(error)));
+      this._setState(
+        errorState(
+          this._device?.backend === 'soapy'
+            ? error.message
+            : describeConnectionError(error),
+        ),
+      );
       return false;
     }
   }
@@ -1930,14 +2068,20 @@ export class SdrController {
     if (teardown) await teardown;
     // A connect() that started meanwhile owns the published state now.
     if (token !== this._sessionToken) return true;
-    const idleStatus = this.state.webUsbSupported ? 'idle' : 'unsupported';
+    const idleStatus =
+      this.state.webUsbSupported || this._soapy ? 'idle' : 'unsupported';
     this._setState({
       connected: false,
+      receiverBackend: null,
       status: preserveMessage ? this.state.status : idleStatus,
       ...(preserveMessage
         ? {}
         : {
-            message: message || (() => t('RTL-SDR disconnected')),
+            message:
+              message ||
+              (this._soapy
+                ? () => t('Local SDR disconnected')
+                : () => t('RTL-SDR disconnected')),
             errorText: null,
           }),
       snr: null,

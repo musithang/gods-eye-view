@@ -11,7 +11,7 @@ import { useRadioStore } from '../../stores/radio.js';
 import UiButton from '../../kit/UiButton.vue';
 import UiSelect from '../../kit/UiSelect.js';
 
-// The local RTL-SDR card in the Radio panel. LocalSdrControls presents it and
+// The local SDR card in the Radio panel. LocalSdrControls presents it and
 // publishes it; until it does, the card shows its initial markup. Its
 // controls call LocalSdrControls through the store. The numeric gain
 // options read in the page language; their values stay numeric.
@@ -24,24 +24,34 @@ const tune = () => act('tuneSdr', frequency.value.value);
 </script>
 
 <template>
-<div id="sdr-radio-card" class="sdr-radio-card" role="group" :aria-label="t('Local RTL-SDR receiver')">
+<div id="sdr-radio-card" class="sdr-radio-card" role="group" :aria-label="t('Local SDR receiver')">
   <div class="sdr-radio-heading">
-    <strong>{{ t('LOCAL RTL-SDR') }}</strong>
+    <strong>{{ t('LOCAL SDR') }}</strong>
     <span id="sdr-connection-state" v-class-toggle="{ active: sdr?.connectionActive }">{{ sdr ? sdr.connectionLabel : 'NO USB' }}</span>
   </div>
-  <p>{{ t('Chrome/Edge · WebUSB · one local tuner shared by FM and the Local ADS-B layer.') }}</p>
+  <div v-if="sdr?.soapyEnabled" class="sdr-gain-row">
+    <label for="sdr-receiver-select">{{ t('RECEIVER') }}</label>
+    <UiSelect id="sdr-receiver-select" class="gev-field" :model-value="sdr.receiverChoice" :disabled="sdr.receiverChoiceDisabled" @update:model-value="act('selectSdrReceiver', $event)">
+      <option value="auto">{{ t('AUTO') }}</option>
+      <option v-if="sdr.webUsbSupported" value="webusb">RTL-SDR · WebUSB</option>
+      <option v-for="device in sdr.soapyDevices" :key="device.id" :value="device.id">{{ device.label }} · SoapySDR</option>
+    </UiSelect>
+    <UiButton @click="act('scanSdrReceivers')" :disabled="sdr.scanDisabled">{{ t('SCAN DEVICES') }}</UiButton>
+  </div>
+  <p v-if="sdr?.soapyError" class="radio-playback-state error" role="status">{{ sdr.soapyError }}</p>
+  <p v-else-if="sdr?.soapyEmpty" role="status">{{ t('No SoapySDR receivers found') }}</p>
   <div class="sdr-radio-actions">
     <UiButton id="sdr-connect-btn" @click="act('toggleSdrConnection')" class="panel-layer-toggle" :pressed="sdr?.connectPressed ?? false" pressed-class="active" :disabled="sdr?.connectDisabled">{{ sdr ? sdr.connectLabel : t('CONNECT') }}</UiButton>
     <UiButton id="sdr-locate-btn" @click="act('locateSdr')" v-class-toggle="{ active: sdr?.locateActive }" :title="t('Use your location for faster ADS-B position decoding')" :disabled="sdr?.locateDisabled">{{ sdr ? sdr.locateLabel : t('LOCATE') }}</UiButton>
     <UiButton id="sdr-change-device-btn" @click="act('changeSdrDevice')" :title="t('Choose a different RTL-SDR or receiver channel')" :disabled="sdr?.changeDeviceDisabled">{{ t('CHANGE DEVICE') }}</UiButton>
   </div>
-  <div class="sdr-mode-row" role="group" :aria-label="t('RTL-SDR receiver mode')">
+  <div class="sdr-mode-row" role="group" :aria-label="t('SDR receiver mode')">
     <UiButton id="sdr-mode-fm-btn" @click="act('setSdrMode', 'fm')" :pressed="sdr ? sdr.fmActive : true" pressed-class="active" :disabled="sdr?.modeDisabled" translate="no">FM</UiButton>
     <UiButton id="sdr-mode-adsb-btn" @click="act('setSdrMode', 'adsb')" :pressed="sdr?.adsbActive ?? false" pressed-class="active" :disabled="sdr?.modeDisabled" translate="no">ADS-B · 1090</UiButton>
   </div>
   <div class="sdr-gain-row">
     <label for="sdr-gain-select">{{ t('GAIN') }}</label>
-    <UiSelect class="gev-field" id="sdr-gain-select" hold :model-value="sdr ? sdr.gain : 'auto'" @update:model-value="act('setSdrGain', $event)" :aria-label="t('RTL-SDR tuner gain for the current mode')" :disabled="sdr?.gainDisabled">
+    <UiSelect class="gev-field" id="sdr-gain-select" hold :model-value="sdr ? sdr.gain : 'auto'" @update:model-value="act('setSdrGain', $event)" :aria-label="t('SDR tuner gain for the current mode')" :disabled="sdr?.gainDisabled">
       <option value="auto">{{ t('AUTO') }}</option>
       <option v-for="gain in GAINS" :key="gain" :value="gain" translate="no">{{ localSdrGainOptionLabel(gain) }}</option>
     </UiSelect>

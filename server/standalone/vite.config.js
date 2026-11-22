@@ -9,6 +9,7 @@ import { conformanceReferencesPlugin } from './conformance-references.js';
 import { googleTokenUnavailablePlugin } from './google-token-unavailable.js';
 import { standaloneVoiceTools } from './voiceTools.js';
 import { unwatchedRuntimeDirsPlugin } from './unwatched-cache.js';
+import { soapyReceiverPlugin } from './soapy-receivers.js';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
@@ -30,6 +31,7 @@ export function standaloneConfig(
         nominatimStorageDir,
       }),
       localMcpPlugin(),
+      soapyReceiverPlugin(),
       googleTokenUnavailablePlugin(),
       conformanceReferencesPlugin(),
       apiNotFoundPlugin(),

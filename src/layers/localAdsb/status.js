@@ -49,7 +49,7 @@ function feedsConfigured(feedState) {
   );
 }
 
-function webUsbStatus(receiver, heard, feedState) {
+function receiverStatus(receiver, heard, feedState) {
   if (receiver.status === 'error')
     return { status: 'error', error: receiver.errorText ?? receiver.message };
   if (receiver.status === 'connecting' || receiver.status === 'tuning')
@@ -60,7 +60,7 @@ function webUsbStatus(receiver, heard, feedState) {
     !receiver.connected
   )
     return { loading: true, loadingLabel: msg('checking decoder feeds') };
-  if (!receiver.webUsbSupported)
+  if (!receiver.webUsbSupported && !receiver.soapyEnabled)
     return {
       status: 'idle',
       statusMessage: msg('WebUSB needs desktop Chrome or Edge'),
@@ -97,21 +97,29 @@ function webUsbStatus(receiver, heard, feedState) {
  *   stale / source.
  */
 export function localAdsbStatus({ receiver, feedState, heard }) {
+  const soapyActive = receiver.receiverBackend === 'soapy';
   if (!feedsConfigured(feedState))
     return {
-      source: LAYER_SOURCE,
-      ...webUsbStatus(receiver, heard, feedState),
+      source: soapyActive ? 'SoapySDR' : LAYER_SOURCE,
+      ...receiverStatus(receiver, heard, feedState),
     };
-  const usbActive = Boolean(receiver.connected && receiver.mode === 'adsb');
-  const source = usbActive ? COMBINED_SOURCE : FEED_SOURCE;
+  const receiverActive = Boolean(
+    receiver.connected && receiver.mode === 'adsb',
+  );
+  const source = receiverActive
+    ? soapyActive
+      ? msg('SoapySDR + decoder feeds')
+      : COMBINED_SOURCE
+    : FEED_SOURCE;
   const live = feedState.feeds.filter((feed) => feed.status === 'live');
   const problems = [describeFeedProblems(feedState.feeds)].filter(Boolean);
-  if (usbActive && receiver.status === 'error') problems.push(msg('USB error'));
+  if (receiverActive && receiver.status === 'error')
+    problems.push(soapyActive ? msg('SoapySDR error') : msg('USB error'));
   const rate =
-    usbActive &&
+    receiverActive &&
     receiver.status !== 'error' &&
     Number.isFinite(receiver.messagesPerSecond)
-      ? ` · USB ${receiver.messagesPerSecond} msg/s`
+      ? ` · ${soapyActive ? 'SoapySDR' : 'USB'} ${receiver.messagesPerSecond} msg/s`
       : '';
   const heardText = `${heard} heard`;
   if (!problems.length) {
@@ -123,8 +131,8 @@ export function localAdsbStatus({ receiver, feedState, heard }) {
     };
   }
   const problemText = problems.join(' · ');
-  const usbProducing = usbActive && receiver.status !== 'error';
-  if (!live.length && !usbProducing) {
+  const receiverProducing = receiverActive && receiver.status !== 'error';
+  if (!live.length && !receiverProducing) {
     // Decoders that stopped but still serve their last aircraft.json are
     // stale, not down: only an unreachable or unusable feed is an error.
     const readable = feedState.feeds.filter(

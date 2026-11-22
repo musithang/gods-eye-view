@@ -1287,3 +1287,45 @@ test("a rebuilt decoder worker's spectra are accepted before its first reset", a
   });
   assert.equal(controller._spectrumSequence, before + 1);
 });
+
+test('SDR selection preserves authorized WebUSB and uses SoapySDR for other receivers', async (t) => {
+  t.after(replaceGlobal('Worker', FakeWorker));
+  const native = { vendorId: 0x0bda, productId: 0x2838 };
+  const rtl = { id: 'rtl', driver: 'rtlsdr', label: 'RTL-SDR' };
+  const pluto = { id: 'pluto', driver: 'plutosdr', label: 'PlutoSDR' };
+  for (const [webUsb, expected] of [
+    [{ getDevices: async () => [native] }, 'webusb'],
+    [{ getDevices: async () => [] }, 'soapy'],
+    [null, 'soapy'],
+  ]) {
+    const events = [];
+    const controller = new SdrController({
+      webUsb,
+      storage: memoryStorage(),
+      providerFactory: () => ({
+        get: async () => fakeDevice(events, 'webusb'),
+      }),
+      soapy: {
+        discover: async () => [pluto, rtl],
+        open: async () => ({
+          ...fakeDevice(events, 'soapy'),
+          backend: 'soapy',
+        }),
+      },
+    });
+    try {
+      await controller.scanReceivers();
+      assert.deepEqual(
+        controller.getState().soapyDevices,
+        webUsb ? [pluto] : [pluto, rtl],
+      );
+      assert.equal(await controller.connect('adsb'), true);
+      assert.equal(controller.getState().receiverBackend, expected);
+      assert.ok(events.includes(`${expected}:tune:1090000000`));
+      await controller.stop();
+      assert.ok(events.includes(`${expected}:close`));
+    } finally {
+      await controller.destroy();
+    }
+  }
+});
