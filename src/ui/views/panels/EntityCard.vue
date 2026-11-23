@@ -14,6 +14,7 @@ import UiButton from '../../kit/UiButton.vue';
 import UiCloseButton from '../../kit/UiCloseButton.vue';
 import UiIcon from '../../kit/UiIcon.vue';
 import { useCctvStore } from '../../stores/cctv.js';
+import { useRadioStore } from '../../stores/radio.js';
 import SpotConditions from './SpotConditions.vue';
 import { shownLayerName } from '../../layerNames.js';
 import { countryName, nearestCity } from '../../../data/wikidataCities.js';
@@ -27,6 +28,7 @@ const props = defineProps({
 });
 const store = useEntityCardStore();
 const { card, lost, tick, away, finding, located } = storeToRefs(store);
+const radio = useRadioStore();
 // Cameras carry only an id; the CCTV panel's store knows the picked one's name.
 const { frame: cctvFrame } = storeToRefs(useCctvStore());
 const shownTitle = computed(() => {
@@ -483,6 +485,9 @@ watch(
           </UiButton>
           <UiButton v-if="store.canFollow()" class="entity-card__action" :pressed="Boolean(store.isFollowing())" pressed-class="entity-card__action--on" @click="store.follow()">
             <UiIcon name="navigation" :size="null" />{{ store.isFollowing() ? t('Following') : t('Follow') }}
+          </UiButton>
+          <UiButton v-if="card.kind === 'aircraft' && radio.sdr" class="entity-card__action" :disabled="radio.sdr.connectDisabled" @click="radio.act('openManualAtc')">
+            {{ t('ATC channels') }}
           </UiButton>
         </div>
         <!-- The chat bubble is no Material symbol the page loads, so it stays drawn. -->

@@ -28,6 +28,28 @@ of the public one; both markers are drawn on purpose.
   at a time, so a dongle that dump1090 or dump978 owns cannot also be opened by
   the browser.
 
+## Local ATC audio
+
+In **Radio → Local SDR**, choose **ATC · AM**, enter the published VHF
+channel, and press **Tune**. If the receiver is disconnected, use **Connect**
+after choosing the channel. The field accepts 25 and 8.33 kHz channel
+designators, such as `118.005`. Volume and receiver gain remain available while
+listening. An SDR tuned to ATC pauses that device's USB ADS-B reception.
+Configured ADS-B decoder feeds continue while the Local ADS-B layer is enabled.
+
+**ATC channels** on an aircraft card opens **Radio → Local SDR** in ATC mode.
+Presets appear at the bottom of the receiver card while ATC mode is selected.
+A position-checked route supplies available Tower and Approach channels for
+its airports. When neither endpoint matches, the list can suggest the closest
+catalogued airport within 100 km of the aircraft. Choosing a preset retunes
+an open SDR or prepares the channel for **Connect**. The presets tune shared
+airport channels. Reception depends on the receiver's location and antenna.
+
+The catalogue is a snapshot of the public-domain OurAirports database.
+To refresh it, download `airports.csv` and `airport-frequencies.csv` from
+[OurAirports](https://github.com/davidmegginson/ourairports-data) and run
+`node scripts/build-airport-atc-catalog.mjs airports.csv airport-frequencies.csv`.
+
 ## Configuring feeds
 
 Feeds are set in the server environment only (`.env`), never in the browser:
